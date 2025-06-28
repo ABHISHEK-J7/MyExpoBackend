@@ -1,100 +1,77 @@
 const Cart = require('../models/Cart');
 const Donation = require('../models/Donation');
-const { sendExpoPushNotification } = require('../utils/sendNotification');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
-const haversine = require('haversine-distance'); // For distance calculation
+const { sendFCMNotification } = require('../utils/sendNotification');
+const haversine = require('haversine-distance');
 
 // @desc    Get user's cart
-// @route   GET /api/cart/:userId
-// @access  Public
+// @route   GET /api/cart
+// @access  Private
 const getCart = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const decodedUserId = decodeURIComponent(userId);
-    
-    let cart = await Cart.findOne({ userId: decodedUserId });
+    const userId = req.user.email;
+    let cart = await Cart.findOne({ userId });
     
     if (!cart) {
-      cart = new Cart({ userId: decodedUserId, items: [] });
+      cart = new Cart({ userId, items: [] });
       await cart.save();
     }
     
     res.status(200).json(cart);
   } catch (error) {
     console.error("Get Cart Error:", error);
-    res.status(500).json({ message: "Server error while fetching cart" });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
 // @desc    Add item to cart
 // @route   POST /api/cart/add
-// @access  Public
+// @access  Private
 const addToCart = async (req, res) => {
   try {
-    const { userId, donationId } = req.body;
+    const userId = req.user.email;
+    const { donationId, servings } = req.body;
     
-    if (!userId || !donationId) {
-      return res.status(400).json({ message: "User ID and donation ID are required" });
-    }
-    
-    // Check if donation exists
-    const donation = await Donation.findById(donationId);
-    if (!donation) {
-      return res.status(404).json({ message: "Donation not found" });
-    }
-    
-    // Check if donation is still available (not expired)
-    if (new Date(donation.expiryDate) < new Date()) {
-      return res.status(400).json({ message: "This donation has expired" });
+    if (!donationId || !servings || servings < 1) {
+      return res.status(400).json({ message: "Valid donationId and servings are required" });
     }
     
     let cart = await Cart.findOne({ userId });
-    
     if (!cart) {
       cart = new Cart({ userId, items: [] });
     }
     
     // Check if item already exists in cart
-    const existingItem = cart.items.find(item => item.donationId.toString() === donationId);
-    if (existingItem) {
-      return res.status(400).json({ message: "Item already exists in cart" });
-    }
+    const existingItemIndex = cart.items.findIndex(item => item.donationId.toString() === donationId);
     
-    // Add item to cart
-    cart.items.push({
-      donationId,
-      foodName: donation.foodName,
-      foodType: donation.foodType,
-      quantity: donation.quantity,
-      donorName: donation.donorName,
-      locationName: donation.locationName,
-      coordinates: donation.coordinates,
-    });
+    if (existingItemIndex > -1) {
+      // Update existing item
+      cart.items[existingItemIndex].servings += servings;
+    } else {
+      // Add new item
+      cart.items.push({ donationId, servings });
+    }
     
     cart.updatedAt = new Date();
     await cart.save();
     
-    res.status(200).json({ message: "Item added to cart successfully", cart });
+    res.status(200).json({ message: "Item added to cart", cart });
   } catch (error) {
     console.error("Add to Cart Error:", error);
-    res.status(500).json({ message: "Server error while adding to cart" });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
 // @desc    Remove item from cart
-// @route   DELETE /api/cart/remove
-// @access  Public
+// @route   DELETE /api/cart/remove/:donationId
+// @access  Private
 const removeFromCart = async (req, res) => {
   try {
-    const { userId, donationId } = req.body;
-    
-    if (!userId || !donationId) {
-      return res.status(400).json({ message: "User ID and donation ID are required" });
-    }
+    const userId = req.user.email;
+    const { donationId } = req.params;
     
     const cart = await Cart.findOne({ userId });
-    
     if (!cart) {
       return res.status(404).json({ message: "Cart not found" });
     }
@@ -103,47 +80,42 @@ const removeFromCart = async (req, res) => {
     cart.updatedAt = new Date();
     await cart.save();
     
-    res.status(200).json({ message: "Item removed from cart successfully", cart });
+    res.status(200).json({ message: "Item removed from cart", cart });
   } catch (error) {
     console.error("Remove from Cart Error:", error);
-    res.status(500).json({ message: "Server error while removing from cart" });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
 // @desc    Clear cart
-// @route   DELETE /api/cart/clear/:userId
-// @access  Public
+// @route   DELETE /api/cart/clear
+// @access  Private
 const clearCart = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const decodedUserId = decodeURIComponent(userId);
+    const userId = req.user.email;
+    const cart = await Cart.findOne({ userId });
     
-    const cart = await Cart.findOne({ userId: decodedUserId });
-    
-    if (!cart) {
-      return res.status(404).json({ message: "Cart not found" });
+    if (cart) {
+      cart.items = [];
+      cart.updatedAt = new Date();
+      await cart.save();
     }
     
-    cart.items = [];
-    cart.updatedAt = new Date();
-    await cart.save();
-    
-    res.status(200).json({ message: "Cart cleared successfully", cart });
+    res.status(200).json({ message: "Cart cleared", cart });
   } catch (error) {
     console.error("Clear Cart Error:", error);
-    res.status(500).json({ message: "Server error while clearing cart" });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// @desc    Checkout cart
+// @desc    Checkout cart (claim donations)
 // @route   POST /api/cart/checkout
-// @access  Public
+// @access  Private
 const checkoutCart = async (req, res) => {
   try {
-    const { userId, claims } = req.body;
-    if (!userId) {
-      return res.status(400).json({ message: "User ID is required" });
-    }
+    const userId = req.user.email;
+    const { claims } = req.body;
+    
     if (!Array.isArray(claims) || claims.length === 0) {
       return res.status(400).json({ message: "Claims are required" });
     }
@@ -184,12 +156,12 @@ const checkoutCart = async (req, res) => {
             donorBody += `\nReceiver is coming from: ${receiver.address}`;
           }
           
-          // Send push notification
-          await sendExpoPushNotification(
+          // Send Firebase push notification
+          await sendFCMNotification(
             donor.fcmToken,
             'Donation Claimed',
             donorBody,
-            { type: 'donation_claimed', donationId: donation._id }
+            { type: 'donation_claimed', donationId: donation._id.toString() }
           );
           
           // Save notification to database
@@ -224,12 +196,12 @@ const checkoutCart = async (req, res) => {
           }
           const receiverBody = `You have claimed ${donation.donorName}'s donation.\n${mapUrl ? 'Donor location: ' + mapUrl : ''}${distanceStr}\nYou have 2 hours to claim the donation.`;
           
-          // Send push notification
-          await sendExpoPushNotification(
+          // Send Firebase push notification
+          await sendFCMNotification(
             receiver.fcmToken,
             'Donation Claimed',
             receiverBody,
-            { type: 'donation_claimed', donationId: donation._id, mapUrl }
+            { type: 'donation_claimed', donationId: donation._id.toString(), mapUrl }
           );
           
           // Save notification to database
@@ -299,7 +271,9 @@ const testNotification = async (req, res) => {
     console.log(`🧪 FCM token: ${fcmToken.substring(0, 20)}...`);
 
     const testMessage = 'This is a test notification from the food donation app!';
-    const result = await sendExpoPushNotification(
+    
+    // Send Firebase notification
+    await sendFCMNotification(
       fcmToken,
       'Test Notification',
       testMessage,
@@ -317,19 +291,12 @@ const testNotification = async (req, res) => {
     });
     await testNotification.save();
 
-    if (result) {
-      res.status(200).json({ 
-        success: true, 
-        message: "Test notification sent successfully",
-        email,
-        fcmTokenPreview: fcmToken.substring(0, 20) + '...'
-      });
-    } else {
-      res.status(500).json({ 
-        success: false, 
-        message: "Failed to send test notification" 
-      });
-    }
+    res.status(200).json({ 
+      success: true, 
+      message: "Test notification sent successfully",
+      email,
+      fcmTokenPreview: fcmToken.substring(0, 20) + '...'
+    });
   } catch (error) {
     console.error("Test notification error:", error);
     res.status(500).json({ message: "Server error during test notification" });
