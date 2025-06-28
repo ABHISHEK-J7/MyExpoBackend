@@ -21,6 +21,7 @@ const PORT = config.PORT;
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -35,25 +36,9 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/cart', cartRoutes);
 
-// Health check endpoint for Render
+  
 app.get('/', (req, res) => {
-    res.json({
-        message: 'Server is running...',
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development'
-    });
-});
-
-// Health check endpoint for monitoring
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'healthy',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        memory: process.memoryUsage(),
-        environment: process.env.NODE_ENV || 'development'
-    });
+    res.send('Server is running...');
 });
 
 // Scheduled job to reset expired claims (not received within 150 min)
@@ -79,25 +64,6 @@ cron.schedule('*/5 * * * *', async () => {
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    error: 'Something went wrong!',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
-  });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    error: 'Route not found',
-    path: req.originalUrl
-  });
-});
-
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📊 Health check available at: http://localhost:${PORT}/health`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Server running on port ${PORT}`);
 });
